@@ -23,7 +23,7 @@ EMBEDDED_ROBLOX_HEIGHT = 600
 
 
 def find_macro_window():
-    """Find the Anime Paradox Macro window and return its position"""
+    """Find the Anime Paradox Free by Ryan window and return its position"""
     EnumWindows = user32.EnumWindows
     EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
     GetWindowText = user32.GetWindowTextW
@@ -41,7 +41,7 @@ def find_macro_window():
             buff = ctypes.create_unicode_buffer(length + 1)
             GetWindowText(hwnd, buff, length + 1)
             title = buff.value
-            if 'Anime Paradox Macro' in title:
+            if 'Anime Paradox Free by Ryan' in title:
                 rect = wintypes.RECT()
                 GetWindowRect(hwnd, ctypes.byref(rect))
                 result.append({
@@ -69,6 +69,10 @@ def find_roblox_window():
     GetWindowText = user32.GetWindowTextW
     GetWindowTextLength = user32.GetWindowTextLengthW
     GetWindowRect = user32.GetWindowRect
+    GetClassName = user32.GetClassNameW
+    
+    # Known Roblox window class names
+    ROBLOX_CLASSES = {'windowsclient', 'robloxplayerbeta'}
     
     result = []
     
@@ -76,28 +80,47 @@ def find_roblox_window():
         # Only check visible windows
         if not IsWindowVisible(hwnd):
             return True
+        
+        # Check window class name first (most reliable)
+        class_buff = ctypes.create_unicode_buffer(256)
+        GetClassName(hwnd, class_buff, 256)
+        class_name = class_buff.value.lower()
+        
+        is_roblox = class_name in ROBLOX_CLASSES
+        
+        # Fallback: check window title
+        if not is_roblox:
+            length = GetWindowTextLength(hwnd)
+            if length > 0:
+                buff = ctypes.create_unicode_buffer(length + 1)
+                GetWindowText(hwnd, buff, length + 1)
+                title = buff.value
+                if 'roblox' in title.lower():
+                    is_roblox = True
+        
+        if is_roblox:
+            # Get title for display
+            length = GetWindowTextLength(hwnd)
+            title = ''
+            if length > 0:
+                buff = ctypes.create_unicode_buffer(length + 1)
+                GetWindowText(hwnd, buff, length + 1)
+                title = buff.value
             
-        length = GetWindowTextLength(hwnd)
-        if length > 0:
-            buff = ctypes.create_unicode_buffer(length + 1)
-            GetWindowText(hwnd, buff, length + 1)
-            title = buff.value
-            # Look for Roblox game window specifically
-            if 'roblox' in title.lower():
-                rect = wintypes.RECT()
-                GetWindowRect(hwnd, ctypes.byref(rect))
-                width = rect.right - rect.left
-                height = rect.bottom - rect.top
-                # Filter out tiny windows (toolbars, etc)
-                if width > 200 and height > 200:
-                    result.append({
-                        'hwnd': hwnd,
-                        'title': title,
-                        'x': rect.left,
-                        'y': rect.top,
-                        'width': width,
-                        'height': height
-                    })
+            rect = wintypes.RECT()
+            GetWindowRect(hwnd, ctypes.byref(rect))
+            width = rect.right - rect.left
+            height = rect.bottom - rect.top
+            # Filter out tiny windows (toolbars, etc)
+            if width > 200 and height > 200:
+                result.append({
+                    'hwnd': hwnd,
+                    'title': title,
+                    'x': rect.left,
+                    'y': rect.top,
+                    'width': width,
+                    'height': height
+                })
         return True
     
     EnumWindows(EnumWindowsProc(enum_callback), 0)
@@ -337,7 +360,7 @@ class PlacementEditorApp:
         location = self.config.get("location", "Leaf Village")
         
         # Build path based on mode and location
-        if self.mode == "Story":
+        if self.mode == "Story" or self.mode == "Legend":
             # Map location to folder name
             if "planet" in location.lower() or "namak" in location.lower() or "namek" in location.lower():
                 folder_name = "Planet"
@@ -345,10 +368,38 @@ class PlacementEditorApp:
                 folder_name = "Leaf"
             elif "hollow" in location.lower() or "dark" in location.lower():
                 folder_name = "Dark"
+            elif "shibuya" in location.lower():
+                folder_name = "Shibuya"
             else:
                 folder_name = "Leaf"  # Default
             
             image_folder = os.path.join(base_folder, "Story", folder_name)
+        elif self.mode == "Auto-Challenges":
+            # Auto-Challenges uses challenge_location which maps to Story folders
+            challenge_location = self.config.get("challenge_location", "Leaf Village")
+            if "planet" in challenge_location.lower() or "namak" in challenge_location.lower() or "namek" in challenge_location.lower():
+                folder_name = "Planet"
+            elif "leaf" in challenge_location.lower() or "village" in challenge_location.lower():
+                folder_name = "Leaf"
+            elif "hollow" in challenge_location.lower() or "dark" in challenge_location.lower():
+                folder_name = "Dark"
+            elif "shibuya" in challenge_location.lower():
+                folder_name = "Shibuya"
+            else:
+                folder_name = "Leaf"  # Default
+            
+            image_folder = os.path.join(base_folder, "Story", folder_name)
+        elif self.mode == "Portals":
+            # Portals mode: starting image/Portals/{portal_selection}/
+            portal_selection = self.config.get("portal_selection", "JJK Portal")
+            portal_folder = portal_selection.replace(" ", " ")  # Keep spaces in folder name
+            image_folder = os.path.join(base_folder, "Portals", portal_folder)
+        elif self.mode == "Raid" or self.mode == "Raids":
+            # Raid mode: starting image/Raid/{location}/
+            image_folder = os.path.join(base_folder, "Raid", location)
+        elif self.mode == "Siege":
+            # Siege mode: starting image/Siege/{location}/
+            image_folder = os.path.join(base_folder, "Siege", location)
         else:
             # For other modes, use base folder
             image_folder = base_folder
@@ -568,6 +619,39 @@ def main():
     
     app = PlacementEditorApp(config_path, mode)
     app.run()
+
+
+def PlacementEditor(parent, config, on_save_callback):
+    """
+    Wrapper function to launch placement editor from main.py
+    Creates a subprocess to avoid Tkinter threading issues
+    """
+    import subprocess
+    import tempfile
+    
+    # Get mode from config
+    mode = config.get("mode", "Story")
+    
+    # Save config to temp file
+    config_path = "config.json"
+    
+    # Launch placement editor as subprocess
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    editor_script = os.path.join(script_dir, "placement_editor.py")
+    
+    # Use python executable from sys
+    python_exe = sys.executable
+    
+    print(f"Launching placement editor: mode={mode}")
+    subprocess.run([python_exe, editor_script, config_path, mode])
+    
+    # Reload config after editor closes
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            updated_config = json.load(f)
+            on_save_callback(updated_config)
+    except Exception as e:
+        print(f"Error reloading config after placement editor: {e}")
 
 
 if __name__ == "__main__":

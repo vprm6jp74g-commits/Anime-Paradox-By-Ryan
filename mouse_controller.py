@@ -8,6 +8,7 @@ import numpy as np
 from PIL import ImageGrab
 import ctypes
 from ctypes import windll, Structure, c_long, byref, c_ulong, c_ushort, c_short, POINTER, Union, sizeof
+import pyautogui  # For scroll functionality
 
 # Windows API constants
 MOUSEEVENTF_MOVE = 0x0001
@@ -201,6 +202,7 @@ def click(x, y, delay=0.1):
 
 def double_click(x, y, delay=0.1):
     """Double click at specified coordinates"""
+    print(f"[INPUT] Double-clicking at ({x}, {y})")
     pydirectinput.click(x, y)
     time.sleep(0.1)
     pydirectinput.click(x, y)
@@ -208,6 +210,7 @@ def double_click(x, y, delay=0.1):
 
 def right_click(x, y, delay=0.1):
     """Right click at specified coordinates"""
+    print(f"[INPUT] Right-clicking at ({x}, {y})")
     pydirectinput.rightClick(x, y)
     time.sleep(delay)
 
@@ -243,25 +246,28 @@ def drag_down(start_x, start_y, distance=200, duration=0.5):
 def scroll_down(clicks=3, delay=0.3):
     """Scroll the mouse wheel down"""
     for _ in range(clicks):
-        pydirectinput.scroll(-1)
+        pyautogui.scroll(-120)  # Negative values scroll down
         time.sleep(0.1)
     time.sleep(delay)
 
 def scroll_up(clicks=3, delay=0.3):
     """Scroll the mouse wheel up"""
     for _ in range(clicks):
-        pydirectinput.scroll(1)
+        pyautogui.scroll(120)  # Positive values scroll up
         time.sleep(0.1)
     time.sleep(delay)
 
 def hold_key(key, duration=1.0):
     """Hold a key for specified duration"""
+    print(f"[INPUT] Holding '{key.upper()}' key for {duration}s...")
     keyboard.press(key)
     time.sleep(duration)
     keyboard.release(key)
+    print(f"[INPUT] Released '{key.upper()}' key after {duration}s")
 
 def press_key(key):
     """Press and release a key"""
+    print(f"[INPUT] Pressing '{key.upper()}' key")
     keyboard.press_and_release(key)
 
 
@@ -278,9 +284,11 @@ def win32_press_key(key):
 
 def spam_key(key, times=5, delay=0.1):
     """Press a key multiple times rapidly"""
-    for _ in range(times):
+    print(f"[INPUT] Spamming '{key.upper()}' key x{times} with {delay}s delay")
+    for i in range(times):
         keyboard.press_and_release(key)
         time.sleep(delay)
+    print(f"[INPUT] Finished spamming '{key.upper()}' key")
 
 def hold_key_until_condition(key, condition_func, timeout=30, check_interval=0.2, running_check=None):
     """
@@ -288,6 +296,7 @@ def hold_key_until_condition(key, condition_func, timeout=30, check_interval=0.2
     condition_func should return True when condition is met
     running_check should return False when macro should stop
     """
+    print(f"[INPUT] Holding '{key.upper()}' key until condition met (timeout: {timeout}s)...")
     keyboard.press(key)
     start_time = time.time()
     result = None
@@ -296,14 +305,19 @@ def hold_key_until_condition(key, condition_func, timeout=30, check_interval=0.2
         while time.time() - start_time < timeout:
             # Check if macro should stop
             if running_check and not running_check():
+                print(f"[INPUT] Hold interrupted - macro stopped after {time.time() - start_time:.2f}s")
                 break
             
             result = condition_func()
             if result:
+                print(f"[INPUT] Condition met - releasing '{key.upper()}' key after {time.time() - start_time:.2f}s")
                 break
             time.sleep(check_interval)
     finally:
+        elapsed = time.time() - start_time
         keyboard.release(key)
+        if not result and elapsed >= timeout:
+            print(f"[INPUT] Hold timeout reached - released '{key.upper()}' key after {elapsed:.2f}s")
     
     return result
 
@@ -400,26 +414,29 @@ class SpiralPattern:
 def find_image_on_screen(template_path, confidence=0.65, region=None, grayscale=True):
     """
     Find an image on screen using template matching
+    Supports transparency in template images (alpha channel used as mask)
     Returns: (x, y) center coordinates if found, None otherwise
     """
     try:
         # Capture screen
         if region:
-            print(f"DEBUG: Capturing screen region: {region}")
             screenshot = ImageGrab.grab(bbox=region)
         else:
-            print("DEBUG: Capturing full screen")
             screenshot = ImageGrab.grab()
         
         # Convert to numpy array
         screen_array = np.array(screenshot)
-        print(f"DEBUG: Screenshot size: {screenshot.size}")
         
-        # Load template
-        template = cv2.imread(template_path)
+        # Load template (strip alpha channel if present, don't use as mask)
+        template = cv2.imread(template_path, cv2.IMREAD_UNCHANGED)
         if template is None:
-            print(f"Error: Could not load template image: {template_path}")
+            print(f"[ERROR] Could not load template image: {template_path}")
             return None
+        
+        # Check if template has alpha channel and remove it
+        if len(template.shape) == 3 and template.shape[2] == 4:
+            # Strip alpha channel
+            template = template[:, :, :3]
         
         # Convert to grayscale if specified
         if grayscale:
@@ -447,10 +464,8 @@ def find_image_on_screen(template_path, confidence=0.65, region=None, grayscale=
                 center_x += region[0]
                 center_y += region[1]
 
-            print(f"Image found at ({center_x}, {center_y}) with confidence {max_val:.2%}")
             return (center_x, center_y)
         else:
-            print(f"Image not found (best match: {max_val:.2%}, threshold: {confidence:.2%})")
             # If we had a region and got a near-miss, try expanding the capture area a bit to allow for slight mis-positioning
             try:
                 if region:
@@ -463,7 +478,6 @@ def find_image_on_screen(template_path, confidence=0.65, region=None, grayscale=
                     right = min(screen_w, region[2] + margin)
                     bottom = min(screen_h, region[3] + margin)
                     expanded = (left, top, right, bottom)
-                    print(f"DEBUG: Trying expanded region: {expanded}")
 
                     try:
                         screenshot2 = ImageGrab.grab(bbox=expanded)
@@ -478,36 +492,54 @@ def find_image_on_screen(template_path, confidence=0.65, region=None, grayscale=
 
                     result2 = cv2.matchTemplate(screen_to_match2, template_to_match, cv2.TM_CCOEFF_NORMED)
                     _, max_val2, _, max_loc2 = cv2.minMaxLoc(result2)
-                    print(f"DEBUG: Expanded match best: {max_val2:.2%}")
                     if max_val2 >= confidence:
                         h2, w2 = template_to_match.shape[:2]
                         center_x2 = max_loc2[0] + w2 // 2 + expanded[0]
                         center_y2 = max_loc2[1] + h2 // 2 + expanded[1]
-                        print(f"Image found in expanded region at ({center_x2}, {center_y2}) with confidence {max_val2:.2%}")
                         return (center_x2, center_y2)
             except Exception as e:
-                print(f"Expanded search error: {e}")
+                print(f"[DEBUG] Expanded search error: {e}")
 
             return None
     except Exception as e:
         print(f"Error in image detection: {e}")
         return None
 
-def wait_for_image(template_path, timeout=30, check_interval=0.5, confidence=0.65, region=None, running_check=None):
+def wait_for_image(template_path, timeout=30, check_interval=0.5, confidence=0.65, region=None, running_check=None, warning_callback=None, warning_time=10):
     """
     Wait until image appears on screen
     running_check should return False when macro should stop
+    warning_callback: Optional function to call if still searching after warning_time seconds
+    warning_time: Seconds to wait before calling warning_callback (default: 10)
     timeout: Maximum seconds to wait, or None for indefinite waiting
     Returns: (x, y) if found within timeout, None otherwise
     """
+    import os
+    image_name = os.path.basename(template_path)
+    print(f"[SEARCH] Looking for image '{image_name}' (confidence: {confidence}, timeout: {timeout}s)...")
     start_time = time.time()
+    warning_shown = False
+    attempt_count = 0
     while timeout is None or time.time() - start_time < timeout:
         # Check if macro should stop
         if running_check and not running_check():
+            print(f"[SEARCH] Search interrupted for '{image_name}' after {time.time() - start_time:.2f}s")
             return None
         
+        # Show warning if still searching after warning_time
+        if warning_callback and not warning_shown and time.time() - start_time >= warning_time:
+            print(f"[SEARCH] Still searching for '{image_name}' after {warning_time}s...")
+            warning_callback()
+            warning_shown = True
+        
+        attempt_count += 1
         result = find_image_on_screen(template_path, confidence=confidence, region=region)
         if result:
+            elapsed = time.time() - start_time
+            print(f"[SEARCH] ✓ Found '{image_name}' at ({result[0]}, {result[1]}) after {elapsed:.2f}s ({attempt_count} attempts)")
             return result
         time.sleep(check_interval)
+    
+    elapsed = time.time() - start_time
+    print(f"[SEARCH] ✗ Timeout: '{image_name}' not found after {elapsed:.2f}s ({attempt_count} attempts)")
     return None

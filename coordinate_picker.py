@@ -133,13 +133,11 @@ class CoordinatePicker:
                 print(f"DEBUG: Skipping current unit {self.unit_index}")
                 continue
             
-            # Convert screen coordinates to canvas coordinates
-            screen_x = unit.get("x", 0)
-            screen_y = unit.get("y", 0)
-            canvas_x = screen_x - self.window_x
-            canvas_y = screen_y - self.window_y
+            # Coordinates are now stored as relative to Roblox window, use them directly
+            canvas_x = unit.get("x", 0)
+            canvas_y = unit.get("y", 0)
             
-            print(f"DEBUG: Unit {unit.get('index')}: screen({screen_x}, {screen_y}) -> canvas({canvas_x}, {canvas_y})")
+            print(f"DEBUG: Unit {unit.get('index')}: relative coords ({canvas_x}, {canvas_y})")
             
             # Skip if outside window bounds
             if canvas_x < 0 or canvas_x > self.window_width or canvas_y < 0 or canvas_y > self.window_height:
@@ -156,7 +154,7 @@ class CoordinatePicker:
                 canvas_x - marker_size, canvas_y - marker_size,
                 canvas_x + marker_size, canvas_y + marker_size,
                 outline='#00ff00',
-                fill='#00ff0033',
+                fill='#80ff80',
                 width=2,
                 tags='other_unit'
             )
@@ -177,14 +175,37 @@ class CoordinatePicker:
         canvas_x = event.x
         canvas_y = event.y
         
-        # Calculate and store absolute screen coordinates directly
-        # This is where the mouse will actually click on screen
-        self.selected_x = self.window_x + canvas_x
-        self.selected_y = self.window_y + canvas_y
+        # Check if click is near an existing unit coordinate (snap feature)
+        snap_threshold = 25  # pixels
+        snapped_coord = None
         
-        # Update label to show screen coordinates
+        for unit in self.other_units:
+            unit_x = unit.get("x", 0)
+            unit_y = unit.get("y", 0)
+            
+            # Calculate distance to this unit
+            distance = ((canvas_x - unit_x) ** 2 + (canvas_y - unit_y) ** 2) ** 0.5
+            
+            # If within snap threshold, snap to this coordinate
+            if distance <= snap_threshold:
+                snapped_coord = (unit_x, unit_y)
+                print(f"Snapped to Unit {unit.get('index', '?')} at ({unit_x}, {unit_y})")
+                break
+        
+        # Use snapped or clicked coordinates
+        if snapped_coord:
+            self.selected_x = snapped_coord[0]
+            self.selected_y = snapped_coord[1]
+            marker_color = '#ffaa00'  # Orange for snapped coordinates
+        else:
+            self.selected_x = canvas_x
+            self.selected_y = canvas_y
+            marker_color = '#ff00ff'  # Magenta for new coordinates
+        
+        # Update label to show relative coordinates
+        snap_indicator = " (SNAPPED)" if snapped_coord else ""
         self.coord_label.config(
-            text=f"Screen: ({self.selected_x}, {self.selected_y})",
+            text=f"Relative: ({self.selected_x}, {self.selected_y}){snap_indicator}",
             fg='#00ff00'
         )
         
@@ -194,9 +215,9 @@ class CoordinatePicker:
         
         marker_size = 10
         self.marker = self.canvas.create_oval(
-            canvas_x - marker_size, canvas_y - marker_size,
-            canvas_x + marker_size, canvas_y + marker_size,
-            outline='#ff00ff',
+            self.selected_x - marker_size, self.selected_y - marker_size,
+            self.selected_x + marker_size, self.selected_y + marker_size,
+            outline=marker_color,
             width=3
         )
         
@@ -245,7 +266,7 @@ class CoordinatePicker:
                             "Upgrade": "0",
                             "Note": f"Unit {i}"
                         }
-                        for i in range(1, 16)
+                        for i in range(1, 31)  # 30 unit slots
                     ]
                 }
                 with open(config_path, 'w', encoding='utf-8') as f:
@@ -278,8 +299,7 @@ class CoordinatePicker:
             # Output coordinates for parent process
             print(f"{self.selected_x},{self.selected_y}")
             
-            self.root.quit()
-            self.root.destroy()
+            self._cleanup()
             
         except Exception as e:
             self.coord_label.config(
@@ -290,12 +310,41 @@ class CoordinatePicker:
     
     def cancel(self):
         """Cancel without saving"""
-        self.root.quit()
-        self.root.destroy()
+        self._cleanup()
     
     def run(self):
         """Run the picker"""
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except Exception as e:
+            print(f"Mainloop error: {e}")
+        finally:
+            # Ensure cleanup even if mainloop fails
+            self._cleanup()
+    
+    def _cleanup(self):
+        """Thoroughly clean up tkinter resources"""
+        try:
+            self.root.quit()
+        except:
+            pass
+        try:
+            self.root.destroy()
+        except:
+            pass
+        try:
+            # Clear image references to free memory
+            self.photo = None
+            self.original_image = None
+            self.display_image = None
+        except:
+            pass
+        try:
+            # Reset tkinter internal state
+            import tkinter as tk
+            tk._default_root = None
+        except:
+            pass
 
 if __name__ == "__main__":
     if len(sys.argv) < 6:
@@ -317,9 +366,19 @@ if __name__ == "__main__":
     # Parse other units JSON if provided
     other_units = []
     if len(sys.argv) > 10:
+        arg = sys.argv[10]
         try:
-            other_units = json.loads(sys.argv[10])
-        except json.JSONDecodeError:
+            # Check if it's a file path (starts with @)
+            if arg.startswith('@'):
+                file_path = arg[1:]  # Remove @ prefix
+                print(f"DEBUG: Reading other_units from file: {file_path}")
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    other_units = json.load(f)
+                print(f"DEBUG: Loaded {len(other_units)} units from file")
+            else:
+                other_units = json.loads(arg)
+        except (json.JSONDecodeError, FileNotFoundError, IOError) as e:
+            print(f"DEBUG: Error loading other_units: {e}")
             other_units = []
     
     picker = CoordinatePicker(image_path, mode, location, act, unit_index, window_x, window_y, window_width, window_height, other_units)
